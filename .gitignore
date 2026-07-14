@@ -11,6 +11,10 @@ venv/
 hex-prep-output/
 _uploads/
 
+# docker-compose volume mounts
+models/
+output/
+
 # model checkpoints
 *.ckpt
 *.onnx

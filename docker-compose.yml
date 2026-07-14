@@ -1,0 +1,11 @@
+services:
+  hex-prep:
+    build: .
+    ports:
+      - "7870:7870"
+    volumes:
+      - ./models:/models    # model checkpoints persist between runs (~2 GB)
+      - ./output:/output    # separated stems land here
+      # optional: mount your music library read-only for CLI query search
+      # - /path/to/your/music:/music:ro
+    gpus: all

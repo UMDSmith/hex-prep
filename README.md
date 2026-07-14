@@ -25,13 +25,66 @@ All models download automatically on first use (~2 GB total for the default chai
 
 ## Install
 
-Requires Python 3.10+, `ffmpeg` in PATH, and ideally an NVIDIA GPU.
+Requires Python 3.10+, `ffmpeg` in PATH, and ideally an NVIDIA GPU. The
+separation stack (torch + onnxruntime) is heavy — install into its own
+environment, not your system Python. Pick one:
+
+### Option A — venv
 
 ```bash
 git clone https://github.com/UMDSmith/hex-prep
 cd hex-prep
+python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[gpu]"     # or ".[cpu]" — much slower
 ```
+
+### Option B — conda
+
+```bash
+git clone https://github.com/UMDSmith/hex-prep
+cd hex-prep
+conda create -n hex-prep python=3.11 -y
+conda activate hex-prep
+pip install -e ".[gpu]"     # or ".[cpu]"
+```
+
+(`requirements.txt` has the same dependencies if you prefer `pip install -r`.)
+
+### Option C — Docker
+
+No Python setup at all. Needs the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) for GPU access.
+
+```bash
+git clone https://github.com/UMDSmith/hex-prep
+cd hex-prep
+docker compose up --build     # web UI on http://localhost:7870
+```
+
+Model checkpoints persist in `./models`, stems land in `./output`. For CLI
+runs inside the container:
+
+```bash
+docker compose run --rm hex-prep hex-prep --file /output/song.mp3
+```
+
+The AI models themselves (~2 GB for the default chain) download automatically
+on first use in every install mode — no manual model setup.
+
+### GPU support
+
+Hardware detection is automatic at runtime — there is nothing to configure.
+torch and onnxruntime probe for a CUDA device and quietly fall back to CPU
+if there isn't one.
+
+| Hardware | Install | What you get |
+|---|---|---|
+| NVIDIA (GTX/RTX, current driver) | `[gpu]` | Full acceleration, seconds per song |
+| CPU only | `[cpu]` | Same results, minutes per song |
+| Apple Silicon | `[cpu]` | torch-based passes accelerate via MPS automatically |
+| AMD GPU | `[cpu]` | Runs on CPU — ROCm isn't supported by this stack |
+
+For Docker without an NVIDIA GPU, delete the `gpus: all` line from
+`docker-compose.yml` and it runs on CPU.
 
 ## Web UI
 
