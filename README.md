@@ -93,7 +93,12 @@ hex-prep-web                # http://127.0.0.1:7870
 hex-prep-web --host 0.0.0.0 # reachable from other devices on your network
 ```
 
-Drop an audio file, click **Process**, download **clean vocals (.wav)** and **clean music (.mp3)**. One GPU job runs at a time; extra uploads queue.
+Drop an audio file, then pick a button:
+
+- **Process** — download **clean vocals (.wav)** + **clean music (.mp3)**
+- **Split backing vocals** — adds the karaoke pass and gives you three stems: **lead vocal**, **backing vocals**, and **instrumental** (all .wav). Use this for duets, choirs, and harmony-heavy tracks.
+
+One GPU job runs at a time; extra uploads queue.
 
 ## CLI
 

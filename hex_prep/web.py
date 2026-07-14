@@ -1,9 +1,11 @@
 """
 hex-prep web UI — drag-and-drop front end for the extraction chain.
 
-Serves a single page: drop (or pick) an audio file, click Process, get
-download links for the clean vocals (.wav) and the clean music (.mp3).
-Wraps process() from hex_prep.cli, always with mix_music=True.
+Serves a single page: drop (or pick) an audio file, then either
+  Process              -> clean vocals (.wav) + clean music (.mp3)
+  Split backing vocals -> lead vocal + backing vocals + instrumental (.wav),
+                          via the becruily MelBand karaoke pass
+Wraps process() from hex_prep.cli.
 
 Data flow: uploaded file -> HEXPREP_OUTPUT_DIR/_uploads/<name> ->
 process() -> HEXPREP_OUTPUT_DIR/<name>/ stems -> served via /download.
@@ -28,9 +30,17 @@ UPLOAD_DIR = cli.OUTPUT_DIR / "_uploads"
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024  # 200 MB uploads
 
-# job_id -> {"vocals": Path, "music": Path}; populated after each run
+# job_id -> {stem_key: Path}; populated after each run
 JOBS: dict[str, dict[str, Path]] = {}
 GPU_LOCK = threading.Lock()
+
+STEM_LABELS = {
+    "vocals":       "Clean vocals (.wav)",
+    "music":        "Clean music (.mp3)",
+    "lead":         "Lead vocal (.wav)",
+    "backing":      "Backing vocals (.wav)",
+    "instrumental": "Instrumental (.wav)",
+}
 
 PAGE = """<!doctype html>
 <html>
@@ -50,9 +60,12 @@ PAGE = """<!doctype html>
   #drop.hover { border-color: #e05555; background: #1e1e2a; }
   #drop p { margin: .3rem 0; color: #aaa; }
   #fname { color: #e8e8f0; font-weight: 600; }
-  button { margin-top: 1.2rem; font-size: 1.05rem; padding: .7rem 2.4rem;
+  #btns { display: flex; gap: 1rem; margin-top: 1.2rem; flex-wrap: wrap;
+          justify-content: center; }
+  button { font-size: 1.05rem; padding: .7rem 2rem;
            border: 0; border-radius: 8px; background: #e05555; color: #fff;
            cursor: pointer; }
+  button.alt { background: #4a4a72; }
   button:disabled { background: #444; color: #888; cursor: default; }
   #status { margin-top: 1.2rem; min-height: 1.4em; color: #aaa; }
   #links { display: flex; gap: 1rem; margin-top: 1rem; flex-wrap: wrap;
@@ -70,13 +83,19 @@ PAGE = """<!doctype html>
   <p>or click to browse</p>
 </div>
 <input type="file" id="file" accept="audio/*,.mp3,.flac,.wav,.m4a,.ogg,.opus,.aac,.wma">
-<button id="go" disabled>Process</button>
+<div id="btns">
+  <button id="go" disabled>Process</button>
+  <button id="goSplit" class="alt" disabled
+          title="Adds a lead/backing separation pass (becruily MelBand karaoke)">
+    Split backing vocals</button>
+</div>
 <div id="status"></div>
 <div id="links"></div>
 <script>
 const drop = document.getElementById('drop');
 const input = document.getElementById('file');
 const go = document.getElementById('go');
+const goSplit = document.getElementById('goSplit');
 const status = document.getElementById('status');
 const links = document.getElementById('links');
 let file = null;
@@ -84,7 +103,7 @@ let file = null;
 function setFile(f) {
   file = f;
   document.getElementById('fname').textContent = f ? f.name : 'Drag & drop a song here';
-  go.disabled = !f;
+  go.disabled = goSplit.disabled = !f;
   links.innerHTML = '';
   status.textContent = '';
 }
@@ -98,9 +117,9 @@ input.addEventListener('change', () => setFile(input.files[0] || null));
 }));
 drop.addEventListener('drop', e => setFile(e.dataTransfer.files[0] || null));
 
-go.addEventListener('click', async () => {
+async function run(mode) {
   if (!file) return;
-  go.disabled = true;
+  go.disabled = goSplit.disabled = true;
   links.innerHTML = '';
   const t0 = Date.now();
   const tick = setInterval(() => {
@@ -109,21 +128,23 @@ go.addEventListener('click', async () => {
   try {
     const fd = new FormData();
     fd.append('song', file);
+    fd.append('mode', mode);
     const resp = await fetch('/process', { method: 'POST', body: fd });
     const data = await resp.json();
     clearInterval(tick);
     if (!resp.ok) { status.textContent = 'ERROR: ' + (data.error || resp.statusText); return; }
     status.textContent = `Done in ${data.seconds}s`;
-    links.innerHTML =
-      `<a href="${data.vocals}" download>⬇ Clean vocals (.wav)</a>` +
-      `<a href="${data.music}" download>⬇ Clean music (.mp3)</a>`;
+    links.innerHTML = data.links.map(l =>
+      `<a href="${l.url}" download>⬇ ${l.label}</a>`).join('');
   } catch (err) {
     clearInterval(tick);
     status.textContent = 'ERROR: ' + err;
   } finally {
-    go.disabled = !file;
+    go.disabled = goSplit.disabled = !file;
   }
-});
+}
+go.addEventListener('click', () => run('standard'));
+goSplit.addEventListener('click', () => run('split'));
 </script>
 </body>
 </html>"""
@@ -150,17 +171,32 @@ def process_song():
     song_path = UPLOAD_DIR / name
     upload.save(song_path)
 
+    # "standard" -> clean vocals + one music file.
+    # "split"    -> lead vocal + backing vocals + instrumental, all separate
+    #               (adds the becruily MelBand karaoke pass).
+    mode = request.form.get("mode", "standard")
+
     t0 = time.time()
     with GPU_LOCK:
-        results = cli.process(song_path, mix_music=True)
+        if mode == "split":
+            results = cli.process(song_path, karaoke=True)
+            stems = {
+                "lead": results["lead"],
+                "backing": results.get("backing") or results.get("backing_dry"),
+                "instrumental": results["instrumental"],
+            }
+        else:
+            results = cli.process(song_path, mix_music=True)
+            stems = {"vocals": results["lead"], "music": results["music"]}
     seconds = round(time.time() - t0, 1)
 
+    stems = {k: v for k, v in stems.items() if v is not None}
     job_id = uuid.uuid4().hex[:12]
-    JOBS[job_id] = {"vocals": results["lead"], "music": results["music"]}
+    JOBS[job_id] = stems
     return jsonify({
         "seconds": seconds,
-        "vocals": f"/download/{job_id}/vocals",
-        "music": f"/download/{job_id}/music",
+        "links": [{"label": STEM_LABELS[k], "url": f"/download/{job_id}/{k}"}
+                  for k in stems],
     })
 
 
