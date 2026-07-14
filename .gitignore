@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# separated stems / uploads (outputs live outside the repo by default,
+# but ignore them in case someone points HEXPREP_OUTPUT_DIR here)
+hex-prep-output/
+_uploads/
+
+# model checkpoints
+*.ckpt
+*.onnx
+*.pth

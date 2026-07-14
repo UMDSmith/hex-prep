@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hex-prep"
+version = "1.0.0"
+description = "Multi-pass vocal extraction: clean vocals + clean music from any song. CLI + drag-and-drop web UI on top of audio-separator (UVR models)."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [{ name = "UMDSmith" }]
+keywords = ["vocal-remover", "stem-separation", "uvr", "audio-separator", "karaoke", "rvc"]
+dependencies = [
+    "flask>=3.0",
+]
+
+[project.optional-dependencies]
+# Pick exactly one of these when installing:
+#   pip install "hex-prep[gpu]"   (NVIDIA CUDA)
+#   pip install "hex-prep[cpu]"
+gpu = ["audio-separator[gpu]>=0.44.0"]
+cpu = ["audio-separator[cpu]>=0.44.0"]
+
+[project.scripts]
+hex-prep = "hex_prep.cli:main"
+hex-prep-web = "hex_prep.web:main"
+
+[project.urls]
+Repository = "https://github.com/UMDSmith/hex-prep"
+
+[tool.setuptools]
+packages = ["hex_prep"]
