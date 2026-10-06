@@ -19,3 +19,9 @@ output/
 *.ckpt
 *.onnx
 *.pth
+.dual-graph/
+
+# local Claude Code / dual-graph tooling — not part of the project
+.claude/
+CLAUDE.md
+CONTEXT.md

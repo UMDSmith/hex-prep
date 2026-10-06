@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hex-prep"
-version = "1.1.0"
+version = "1.2.0"
 description = "Multi-pass vocal extraction: clean vocals + clean music from any song. CLI + drag-and-drop web UI on top of audio-separator (UVR models)."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -13,14 +13,17 @@ authors = [{ name = "UMDSmith" }]
 keywords = ["vocal-remover", "stem-separation", "uvr", "audio-separator", "karaoke", "rvc"]
 dependencies = [
     "flask>=3.0",
+    # audio-separator imports audioread without declaring it; librosa 1.0
+    # stopped pulling it in, so fresh installs crash on import without this.
+    "audioread>=3.0",
 ]
 
 [project.optional-dependencies]
 # Pick exactly one of these when installing:
 #   pip install "hex-prep[gpu]"   (NVIDIA CUDA)
 #   pip install "hex-prep[cpu]"
-gpu = ["audio-separator[gpu]>=0.44.0"]
-cpu = ["audio-separator[cpu]>=0.44.0"]
+gpu = ["audio-separator[gpu]>=0.47.0"]
+cpu = ["audio-separator[cpu]>=0.47.0"]
 
 [project.scripts]
 hex-prep = "hex_prep.cli:main"

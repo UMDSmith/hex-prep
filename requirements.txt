@@ -1,5 +1,6 @@
 # Same dependencies as `pip install -e ".[gpu]"` — use this file if you
 # prefer plain requirements installs.
 # CPU-only machine? Swap [gpu] for [cpu].
-audio-separator[gpu]>=0.44.0
+audio-separator[gpu]>=0.47.0
 flask>=3.0
+audioread>=3.0

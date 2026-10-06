@@ -1,24 +1,27 @@
 """
 hex-prep web UI — drag-and-drop front end for the extraction chain.
 
-Serves a single page: drop (or pick) an audio file, then either
-  Process              -> clean vocals (.wav) + clean music (.mp3)
-  Split backing vocals -> lead vocal + backing vocals + instrumental (.wav),
-                          via the becruily MelBand karaoke pass
-Wraps process() from hex_prep.cli.
+Serves a single page: drop (or pick) an audio file, hit Process, get
+  clean vocals (.wav)  -> lead vocal, backing removed, dereverbed
+  clean music (.mp3)   -> instrumental + backing vocals mixed back together
+Runs the default chain from hex_prep.cli.process(): Leap Xe vocals ->
+BS karaoke split -> anvuew BS dereverb, plus the de-echo stage when the
+"Remove echo / delay" box is ticked.
 
 Data flow: uploaded file -> HEXPREP_OUTPUT_DIR/_uploads/<name> ->
 process() -> HEXPREP_OUTPUT_DIR/<name>/ stems -> served via /download.
 One GPU job at a time (global lock); extra requests wait their turn.
 
-Run:  hex-prep-web            (default http://127.0.0.1:7870)
-      hex-prep-web --port 8123 --host 0.0.0.0
+Run:  ./start.sh  /  start.bat  (sets up .venv on first run, opens browser)
+      hex-prep-web            (default http://127.0.0.1:7870)
+      hex-prep-web --port 8123 --host 0.0.0.0 --open
 """
 import argparse
 import re
 import threading
 import time
 import uuid
+import webbrowser
 from pathlib import Path
 
 from flask import Flask, jsonify, request, send_file
@@ -35,11 +38,8 @@ JOBS: dict[str, dict[str, Path]] = {}
 GPU_LOCK = threading.Lock()
 
 STEM_LABELS = {
-    "vocals":       "Clean vocals (.wav)",
-    "music":        "Clean music (.mp3)",
-    "lead":         "Lead vocal (.wav)",
-    "backing":      "Backing vocals (.wav)",
-    "instrumental": "Instrumental (.wav)",
+    "vocals": "Clean vocals (.wav)",
+    "music":  "Clean music (.mp3)",
 }
 
 PAGE = """<!doctype html>
@@ -60,12 +60,9 @@ PAGE = """<!doctype html>
   #drop.hover { border-color: #e05555; background: #1e1e2a; }
   #drop p { margin: .3rem 0; color: #aaa; }
   #fname { color: #e8e8f0; font-weight: 600; }
-  #btns { display: flex; gap: 1rem; margin-top: 1.2rem; flex-wrap: wrap;
-          justify-content: center; }
-  button { font-size: 1.05rem; padding: .7rem 2rem;
+  button { font-size: 1.05rem; padding: .7rem 2rem; margin-top: 1.2rem;
            border: 0; border-radius: 8px; background: #e05555; color: #fff;
            cursor: pointer; }
-  button.alt { background: #4a4a72; }
   button:disabled { background: #444; color: #888; cursor: default; }
   #status { margin-top: 1.2rem; min-height: 1.4em; color: #aaa; }
   #links { display: flex; gap: 1rem; margin-top: 1rem; flex-wrap: wrap;
@@ -74,6 +71,8 @@ PAGE = """<!doctype html>
              padding: .7rem 1.4rem; border-radius: 8px; }
   #links a:hover { background: #3a3a50; }
   input[type=file] { display: none; }
+  label.opt { margin-top: 1rem; color: #aaa; cursor: pointer; user-select: none; }
+  label.opt input { accent-color: #e05555; margin-right: .4rem; }
 </style>
 </head>
 <body>
@@ -83,19 +82,15 @@ PAGE = """<!doctype html>
   <p>or click to browse</p>
 </div>
 <input type="file" id="file" accept="audio/*,.mp3,.flac,.wav,.m4a,.ogg,.opus,.aac,.wma">
-<div id="btns">
-  <button id="go" disabled>Process</button>
-  <button id="goSplit" class="alt" disabled
-          title="Adds a lead/backing separation pass (becruily MelBand karaoke)">
-    Split backing vocals</button>
-</div>
+<label class="opt" title="Adds a de-echo pass on the lead vocal after dereverb">
+  <input type="checkbox" id="deecho">Remove echo / delay (extra pass)</label>
+<button id="go" disabled>Process</button>
 <div id="status"></div>
 <div id="links"></div>
 <script>
 const drop = document.getElementById('drop');
 const input = document.getElementById('file');
 const go = document.getElementById('go');
-const goSplit = document.getElementById('goSplit');
 const status = document.getElementById('status');
 const links = document.getElementById('links');
 let file = null;
@@ -103,7 +98,7 @@ let file = null;
 function setFile(f) {
   file = f;
   document.getElementById('fname').textContent = f ? f.name : 'Drag & drop a song here';
-  go.disabled = goSplit.disabled = !f;
+  go.disabled = !f;
   links.innerHTML = '';
   status.textContent = '';
 }
@@ -117,9 +112,9 @@ input.addEventListener('change', () => setFile(input.files[0] || null));
 }));
 drop.addEventListener('drop', e => setFile(e.dataTransfer.files[0] || null));
 
-async function run(mode) {
+async function run() {
   if (!file) return;
-  go.disabled = goSplit.disabled = true;
+  go.disabled = true;
   links.innerHTML = '';
   const t0 = Date.now();
   const tick = setInterval(() => {
@@ -128,7 +123,7 @@ async function run(mode) {
   try {
     const fd = new FormData();
     fd.append('song', file);
-    fd.append('mode', mode);
+    fd.append('deecho', document.getElementById('deecho').checked ? '1' : '0');
     const resp = await fetch('/process', { method: 'POST', body: fd });
     const data = await resp.json();
     clearInterval(tick);
@@ -140,11 +135,10 @@ async function run(mode) {
     clearInterval(tick);
     status.textContent = 'ERROR: ' + err;
   } finally {
-    go.disabled = goSplit.disabled = !file;
+    go.disabled = !file;
   }
 }
-go.addEventListener('click', () => run('standard'));
-goSplit.addEventListener('click', () => run('split'));
+go.addEventListener('click', run);
 </script>
 </body>
 </html>"""
@@ -171,23 +165,14 @@ def process_song():
     song_path = UPLOAD_DIR / name
     upload.save(song_path)
 
-    # "standard" -> clean vocals + one music file.
-    # "split"    -> lead vocal + backing vocals + instrumental, all separate
-    #               (adds the becruily MelBand karaoke pass).
-    mode = request.form.get("mode", "standard")
-
+    # Default chain (extract -> karaoke split -> dereverb [-> de-echo]);
+    # backing vocals get folded back into the music mix alongside the
+    # instrumental.
+    deecho = request.form.get("deecho") == "1"
     t0 = time.time()
     with GPU_LOCK:
-        if mode == "split":
-            results = cli.process(song_path, karaoke=True)
-            stems = {
-                "lead": results["lead"],
-                "backing": results.get("backing") or results.get("backing_dry"),
-                "instrumental": results["instrumental"],
-            }
-        else:
-            results = cli.process(song_path, mix_music=True)
-            stems = {"vocals": results["lead"], "music": results["music"]}
+        results = cli.process(song_path, mix_music=True, deecho=deecho)
+        stems = {"vocals": results["lead"], "music": results.get("music")}
     seconds = round(time.time() - t0, 1)
 
     stems = {k: v for k, v in stems.items() if v is not None}
@@ -214,8 +199,16 @@ def main() -> None:
     ap.add_argument("--host", type=str, default="127.0.0.1",
                     help="Bind address (0.0.0.0 to allow other devices on "
                          "your network)")
+    ap.add_argument("--open", action="store_true",
+                    help="Open the UI in your default browser once the "
+                         "server is up (the start scripts pass this)")
     args = ap.parse_args()
     print(f"hex-prep web UI -> http://{args.host}:{args.port}")
+    if args.open:
+        # 0.0.0.0 is a bind address, not something a browser can visit
+        browse_host = "127.0.0.1" if args.host in ("0.0.0.0", "::") else args.host
+        threading.Timer(1.5, webbrowser.open,
+                        args=[f"http://{browse_host}:{args.port}"]).start()
     app.run(host=args.host, port=args.port, threaded=True)
 
 
